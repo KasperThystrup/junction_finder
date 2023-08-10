@@ -1,0 +1,62 @@
+import argparse
+import glob
+import os
+
+configfile: "config/config.yaml"
+
+indir = config["indir"]
+query_file = config["query_file"]
+threshold = config["threshold"]
+outdir = config["outdir"]
+top_only = config["top_only"]
+include_empty = config["include_empty"]
+debug = config["debug"]
+
+# Determine sample files
+sample_files = glob.glob(pathname = "%s/*fasta" %indir)
+samples = [os.path.basename(sample_file.rstrip("fast")).rstrip("\.") for sample_file in sample_files]
+
+rule all:
+  input:
+    junctions = "%s/junctions.tsv" %outdir
+
+rule blast_junctions:
+  input:
+    assembly = "%s/{sample}.fasta" %indir,
+    query = query_file
+  output:
+    blast = temp("%s/{sample}.blast" %outdir)
+  conda:
+    "envs/blast.yaml"
+  message:
+    "Blasting: blastn -outfmt 6 -query {input.query} -subject {input.assembly} > {output.blast}"
+  shell:
+    "blastn -outfmt 6 -query {input.query} -subject {input.assembly} > {output.blast}"
+
+rule index_query:
+  input:
+    query = rules.blast_junctions.input.query
+  output:
+    index = temp("%s/query_idx.fai" %outdir)
+  conda:
+    "envs/samtools.yaml"
+  message:
+    "Indexing query: samtools faidx {input.query} --output {output.index}"
+  shell:
+    "samtools faidx {input.query} --output {output.index}"
+
+rule summarise_junctions:
+  input:
+    blast = expand(rules.blast_junctions.output.blast, sample = samples),
+    index = rules.index_query.output.index
+  params:
+    threshold = threshold,
+    top_only = top_only,
+    include_empty = include_empty,
+    debug = debug
+  output:
+    junctions = "%s/junctions.tsv" %outdir
+  conda:
+    "envs/R.yaml"
+  script:
+    "scripts/summarise_junctions.R"
